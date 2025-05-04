@@ -138,9 +138,7 @@ def main(args):
         epochs=args.epochs,
         batch_size=args.batch_size
     )
-    
-    # Training parameters
-    episode_rewards = []
+
     states, actions, rewards, log_probs, values, dones = [], [], [], [], [], []
     
     # Progress bar for episodes
@@ -170,8 +168,6 @@ def main(args):
             
             if terminated or truncated:
                 break
-                
-        episode_rewards.append(episode_reward)
         
         # Compute next value
         next_state = torch.FloatTensor(observation).to(ppo.device)
@@ -187,8 +183,7 @@ def main(args):
             states, actions, rewards, log_probs, values, dones = [], [], [], [], [], []
         
         # Update progress bar with metrics
-        avg_reward = np.mean(episode_rewards[-10:]) if len(episode_rewards) >= 10 else episode_reward
-        pbar.set_postfix({"Avg Reward": f"{avg_reward:.2f}"})
+        pbar.set_postfix({"Reward": f"{episode_reward:.2f}"})
         
         # Evaluation every 100 episodes
         if episode % 100 == 0 and episode > 0:
@@ -199,11 +194,6 @@ def main(args):
             # Save model if evaluation performance is good
             if mean_reward > 900:
                 ppo.save_model(f"ppo_cartpole_{episode}.pth")
-        
-        # Early stopping
-        if len(episode_rewards) > 50 and np.mean(episode_rewards[-50:]) > 990:
-            tqdm.write("Task solved!")
-            break
     
     # Save final model
     os.makedirs("models", exist_ok=True)
