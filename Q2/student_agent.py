@@ -36,7 +36,7 @@ class Agent(object):
         
         # Load trained model
         try:
-            self.model.load_state_dict(torch.load("models/ppo_cartpole_final.pth", map_location=self.device))
+            self.model.load_state_dict(torch.load("ppo_cartpole_800.pth", map_location=self.device))
             self.model.eval()
         except FileNotFoundError:
             print("Warning: Model file not found. Using untrained model.")
