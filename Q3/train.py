@@ -93,8 +93,8 @@ class SAC:
 
         # Environment setup
         self.env = suite.load(args.domain_name, args.task_name)
-        self.state_dim = sum(np.prod(spec.shape) for spec in self.env.observation_spec().values())
-        self.action_dim = np.prod(self.env.action_spec().shape)
+        self.state_dim = int(sum(np.prod(spec.shape) for spec in self.env.observation_spec().values()))
+        self.action_dim = int(np.prod(self.env.action_spec().shape))
         self.max_action = float(self.env.action_spec().maximum[0])
 
         # Networks
@@ -194,6 +194,7 @@ class SAC:
                 if time_step.last():
                     break
             eval_rewards.append(episode_reward)
+
         self.actor.train()
         return np.mean(eval_rewards)
 
