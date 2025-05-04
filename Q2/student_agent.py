@@ -30,7 +30,7 @@ class Agent(object):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         # Initialize model
-        obs_size = 4  # CartPole Balance: [position, velocity] = 2 + 2
+        obs_size = 5  # CartPole Balance: 5D observation (based on environment)
         act_size = 1
         self.model = ActorCritic(obs_size, act_size).to(self.device)
         
@@ -44,8 +44,8 @@ class Agent(object):
     def act(self, observation):
         # Ensure observation is a numpy array and has correct shape
         obs = np.array(observation, dtype=np.float32)
-        if obs.shape != (4,):
-            obs = obs.flatten()[:4]
+        if obs.shape != (5,):
+            obs = obs.flatten()[:5]
         
         # Convert to tensor and get action
         state = torch.FloatTensor(obs).to(self.device)

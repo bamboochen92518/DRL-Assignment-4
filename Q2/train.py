@@ -125,7 +125,7 @@ def evaluate(ppo, env, num_episodes=5):
 def main(args):
     # Initialize environment
     env = make_dmc_env("cartpole-balance", seed=np.random.randint(0, 1000000), flatten=True, use_pixels=False)
-    obs_size = env.observation_space.shape[0]  # 4 (flattened: pole_pos, cart_pos, pole_vel, cart_vel)
+    obs_size = env.observation_space.shape[0]  # Dynamically set (likely 5)
     act_size = env.action_space.shape[0]  # 1
     
     # Initialize PPO
@@ -198,6 +198,11 @@ def main(args):
             # Save model if evaluation performance is good
             if mean_reward > 900:
                 ppo.save_model(f"ppo_cartpole_{episode}.pth")
+        
+        # Early stopping
+        if len(episode_rewards) > 50 and np.mean(episode_rewards[-50:]) > 990:
+            tqdm.write("Task solved!")
+            break
     
     # Save final model
     os.makedirs("models", exist_ok=True)
