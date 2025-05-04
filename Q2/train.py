@@ -6,8 +6,11 @@ import torch.optim as optim
 from torch.distributions.normal import Normal
 import os
 from tqdm import tqdm
+import sys
+
+# Add parent directory to sys.path for dmc import
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dmc import make_dmc_env
-from agent import Agent
 
 # Set random seed for reproducibility
 torch.manual_seed(42)
@@ -99,7 +102,7 @@ class PPO:
     def save_model(self, path):
         torch.save(self.model.state_dict(), path)
 
-def evaluate(agent, env, num_episodes=5):
+def evaluate(ppo, env, num_episodes=5):
     episode_rewards = []
     for episode in tqdm(range(num_episodes), desc="Evaluating"):
         observation, info = env.reset(seed=np.random.randint(0, 1000000))
@@ -107,8 +110,11 @@ def evaluate(agent, env, num_episodes=5):
         episode_reward = 0
         done = False
         while not done:
-            action = agent.act(observation)
-            observation, reward, terminated, truncated, info = env.step(action)
+            state = torch.FloatTensor(observation).to(ppo.device)
+            dist, _ = ppo.model(state)
+            action = dist.mean  # Deterministic action
+            action_np = action.cpu().detach().numpy()
+            observation, reward, terminated, truncated, info = env.step(action_np)
             episode_reward += reward
             done = terminated or truncated
         
@@ -132,9 +138,6 @@ def main(args):
         epochs=args.epochs,
         batch_size=args.batch_size
     )
-    
-    # Initialize agent for evaluation
-    agent = Agent()  # Uses the trained model from agent.py
     
     # Training parameters
     episode_rewards = []
@@ -189,7 +192,7 @@ def main(args):
         
         # Evaluation every 100 episodes
         if episode % 100 == 0 and episode > 0:
-            eval_rewards = evaluate(agent, env, num_episodes=5)
+            eval_rewards = evaluate(ppo, env, num_episodes=5)
             mean_reward = np.mean(eval_rewards)
             std_reward = np.std(eval_rewards)
             tqdm.write(f"Evaluation at episode {episode}: Mean Reward = {mean_reward:.2f}, Std = {std_reward:.2f}")
