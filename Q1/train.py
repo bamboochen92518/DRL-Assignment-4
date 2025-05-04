@@ -9,6 +9,7 @@ import random
 import copy
 import argparse
 import os
+from tqdm import tqdm
 
 # Actor Network
 class Actor(nn.Module):
@@ -153,6 +154,12 @@ def train_ddpg(args):
     os.makedirs('models', exist_ok=True)
     model_path = 'models/ddpg_pendulum.pth'
     
+    # Initialize reward history for running average
+    reward_history = deque(maxlen=100)
+    
+    # Initialize tqdm progress bar
+    pbar = tqdm(total=args.episodes, desc="Training", unit="episode")
+    
     for episode in range(args.episodes):
         state = env.reset()[0]
         episode_reward = 0
@@ -173,12 +180,22 @@ def train_ddpg(args):
             if done:
                 break
         
-        print(f"Episode {episode+1}/{args.episodes}, Reward: {episode_reward:.2f}, Steps: {step}")
+        reward_history.append(episode_reward)
+        avg_reward = np.mean(reward_history) if reward_history else episode_reward
+        
+        # Update tqdm progress bar with metrics
+        pbar.set_postfix({
+            'Episode': episode + 1,
+            'Avg Reward': f"{avg_reward:.2f}"
+        })
+        pbar.update(1)
         
         # Evaluate every 100 episodes
         if (episode + 1) % 100 == 0:
-            avg_reward = evaluate_agent(agent, env)
-            print(f"Evaluation at Episode {episode+1}: Average Reward = {avg_reward:.2f}")
+            avg_eval_reward = evaluate_agent(agent, env)
+            print(f"\nEvaluation at Episode {episode+1}: Average Reward = {avg_eval_reward:.2f}")
+    
+    pbar.close()
     
     # Save the model
     agent.save_model(model_path)
