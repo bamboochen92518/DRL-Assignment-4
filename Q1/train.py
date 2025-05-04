@@ -204,7 +204,7 @@ if __name__ == "__main__":
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size for training')
     parser.add_argument('--gamma', type=float, default=0.99, help='Discount factor')
     parser.add_argument('--tau', type=float, default=0.005, help='Soft update parameter')
-    parser.add_argument('--episodes', type=int, default=200, help='Number of training episodes')
+    parser.add_argument('--episodes', type=int, default=500, help='Number of training episodes')
     parser.add_argument('--max_steps', type=int, default=500, help='Max steps per episode')
     parser.add_argument('--buffer_capacity', type=int, default=1000000, help='Replay buffer capacity')
     
