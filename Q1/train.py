@@ -154,9 +154,6 @@ def train_ddpg(args):
     os.makedirs('models', exist_ok=True)
     model_path = 'models/ddpg_pendulum.pth'
     
-    # Initialize reward history for running average
-    reward_history = deque(maxlen=100)
-    
     # Initialize tqdm progress bar
     pbar = tqdm(total=args.episodes, desc="Training", unit="episode")
     
@@ -180,13 +177,10 @@ def train_ddpg(args):
             if done:
                 break
         
-        reward_history.append(episode_reward)
-        avg_reward = np.mean(reward_history) if reward_history else episode_reward
-        
         # Update tqdm progress bar with metrics
         pbar.set_postfix({
             'Episode': episode + 1,
-            'Avg Reward': f"{avg_reward:.2f}"
+            'Reward': f"{episode_reward:.2f}"
         })
         pbar.update(1)
         
@@ -210,7 +204,7 @@ if __name__ == "__main__":
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size for training')
     parser.add_argument('--gamma', type=float, default=0.99, help='Discount factor')
     parser.add_argument('--tau', type=float, default=0.005, help='Soft update parameter')
-    parser.add_argument('--episodes', type=int, default=1000, help='Number of training episodes')
+    parser.add_argument('--episodes', type=int, default=200, help='Number of training episodes')
     parser.add_argument('--max_steps', type=int, default=500, help='Max steps per episode')
     parser.add_argument('--buffer_capacity', type=int, default=1000000, help='Replay buffer capacity')
     
