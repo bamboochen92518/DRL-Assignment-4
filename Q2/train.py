@@ -1,213 +1,224 @@
-import gymnasium as gym
+import argparse
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.optim as optim
-from collections import deque
-import random
-import copy
-import argparse
+from torch.distributions.normal import Normal
 import os
 from tqdm import tqdm
+from dmc import make_dmc_env
+from agent import Agent
 
-# Actor Network
-class Actor(nn.Module):
-    def __init__(self, state_dim, action_dim, max_action):
-        super(Actor, self).__init__()
-        self.fc1 = nn.Linear(state_dim, 400)
-        self.fc2 = nn.Linear(400, 300)
-        self.fc3 = nn.Linear(300, action_dim)
-        self.max_action = max_action
-    
-    def forward(self, state):
-        x = F.relu(self.fc1(state))
-        x = F.relu(self.fc2(x))
-        x = torch.tanh(self.fc3(x)) * self.max_action
-        return x
+# Set random seed for reproducibility
+torch.manual_seed(42)
+np.random.seed(42)
 
-# Critic Network
-class Critic(nn.Module):
-    def __init__(self, state_dim, action_dim):
-        super(Critic, self).__init__()
-        self.fc1 = nn.Linear(state_dim + action_dim, 400)
-        self.fc2 = nn.Linear(400, 300)
-        self.fc3 = nn.Linear(300, 1)
-    
-    def forward(self, state, action):
-        x = torch.cat([state, action], dim=1)
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        x = self.fc3(x)
-        return x
+# Actor-Critic Network
+class ActorCritic(nn.Module):
+    def __init__(self, obs_size, act_size):
+        super(ActorCritic, self).__init__()
+        
+        self.shared = nn.Sequential(
+            nn.Linear(obs_size, 64),
+            nn.ReLU(),
+            nn.Linear(64, 64),
+            nn.ReLU()
+        )
+        
+        self.actor_mean = nn.Linear(64, act_size)
+        self.actor_logstd = nn.Parameter(torch.zeros(act_size))
+        self.critic = nn.Linear(64, 1)
+        
+    def forward(self, x):
+        features = self.shared(x)
+        mean = self.actor_mean(features)
+        log_std = self.actor_logstd.expand_as(mean)
+        std = torch.exp(log_std)
+        dist = Normal(mean, std)
+        value = self.critic(features)
+        return dist, value
 
-# Replay Buffer
-class ReplayBuffer:
-    def __init__(self, capacity):
-        self.buffer = deque(maxlen=capacity)
+# PPO Agent
+class PPO:
+    def __init__(self, obs_size, act_size, lr, gamma, clip_eps, epochs, batch_size):
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.model = ActorCritic(obs_size, act_size).to(self.device)
+        self.optimizer = optim.Adam(self.model.parameters(), lr=lr)
+        self.gamma = gamma
+        self.clip_eps = clip_eps
+        self.epochs = epochs
+        self.batch_size = batch_size
+        
+    def compute_gae(self, rewards, values, next_value, dones):
+        advantages = []
+        gae = 0
+        values = values + [next_value]
+        
+        for i in reversed(range(len(rewards))):
+            delta = rewards[i] + self.gamma * values[i + 1] * (1 - dones[i]) - values[i]
+            gae = delta + self.gamma * gae * (1 - dones[i])
+            advantages.insert(0, gae)
+        
+        return advantages
     
-    def push(self, state, action, reward, next_state, done):
-        self.buffer.append((state, action, reward, next_state, done))
-    
-    def sample(self, batch_size):
-        state, action, reward, next_state, done = zip(*random.sample(self.buffer, batch_size))
-        return np.array(state), np.array(action), np.array(reward), np.array(next_state), np.array(done)
-    
-    def __len__(self):
-        return len(self.buffer)
-
-# DDPG Agent
-class DDPG:
-    def __init__(self, state_dim, action_dim, max_action, args):
-        self.actor = Actor(state_dim, action_dim, max_action).to(device)
-        self.actor_target = copy.deepcopy(self.actor)
-        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=args.actor_lr)
+    def update(self, states, actions, log_probs_old, returns, advantages):
+        states = np.array(states)
+        actions = np.array(actions)
+        log_probs_old = np.array(log_probs_old)
+        returns = np.array(returns)
+        advantages = np.array(advantages)
         
-        self.critic = Critic(state_dim, action_dim).to(device)
-        self.critic_target = copy.deepcopy(self.critic)
-        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=args.critic_lr)
+        indices = np.random.permutation(len(states))
         
-        self.max_action = max_action
-        self.replay_buffer = ReplayBuffer(args.buffer_capacity)
-        self.batch_size = args.batch_size
-        self.gamma = args.gamma
-        self.tau = args.tau
-    
-    def select_action(self, state, noise=True):
-        state = torch.FloatTensor(state.reshape(1, -1)).to(device)
-        action = self.actor(state).cpu().data.numpy().flatten()
-        if noise:
-            action = (action + np.random.normal(0, 0.1, size=action.shape)).clip(-self.max_action, self.max_action)
-        return action
-    
-    def train(self):
-        if len(self.replay_buffer) < self.batch_size:
-            return
-        
-        state, action, reward, next_state, done = self.replay_buffer.sample(self.batch_size)
-        
-        state = torch.FloatTensor(state).to(device)
-        action = torch.FloatTensor(action).to(device)
-        reward = torch.FloatTensor(reward).reshape(-1, 1).to(device)
-        next_state = torch.FloatTensor(next_state).to(device)
-        done = torch.FloatTensor(done).reshape(-1, 1).to(device)
-        
-        # Critic update
-        next_action = self.actor_target(next_state)
-        target_Q = self.critic_target(next_state, next_action)
-        target_Q = reward + ((1 - done) * self.gamma * target_Q).detach()
-        
-        current_Q = self.critic(state, action)
-        critic_loss = F.mse_loss(current_Q, target_Q)
-        
-        self.critic_optimizer.zero_grad()
-        critic_loss.backward()
-        self.critic_optimizer.step()
-        
-        # Actor update
-        actor_loss = -self.critic(state, self.actor(state)).mean()
-        
-        self.actor_optimizer.zero_grad()
-        actor_loss.backward()
-        self.actor_optimizer.step()
-        
-        # Update target networks
-        for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
-            target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
-        
-        for param, target_param in zip(self.actor.parameters(), self.actor_target.parameters()):
-            target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
+        for _ in tqdm(range(self.epochs), desc="Epochs", leave=False):
+            for start in range(0, len(states), self.batch_size):
+                idx = indices[start:start + self.batch_size]
+                
+                batch_states = torch.FloatTensor(states[idx]).to(self.device)
+                batch_actions = torch.FloatTensor(actions[idx]).to(self.device)
+                batch_log_probs_old = torch.FloatTensor(log_probs_old[idx]).to(self.device)
+                batch_returns = torch.FloatTensor(returns[idx]).to(self.device)
+                batch_advantages = torch.FloatTensor(advantages[idx]).to(self.device)
+                
+                dist, value = self.model(batch_states)
+                log_probs = dist.log_prob(batch_actions).sum(-1)
+                entropy = dist.entropy().mean()
+                
+                ratio = torch.exp(log_probs - batch_log_probs_old)
+                surr1 = ratio * batch_advantages
+                surr2 = torch.clamp(ratio, 1 - self.clip_eps, 1 + self.clip_eps) * batch_advantages
+                
+                actor_loss = -torch.min(surr1, surr2).mean()
+                critic_loss = (batch_returns - value.squeeze()).pow(2).mean()
+                loss = actor_loss + 0.5 * critic_loss - 0.01 * entropy
+                
+                self.optimizer.zero_grad()
+                loss.backward()
+                self.optimizer.step()
     
     def save_model(self, path):
-        torch.save({
-            'actor_state_dict': self.actor.state_dict(),
-            'critic_state_dict': self.critic.state_dict(),
-        }, path)
+        torch.save(self.model.state_dict(), path)
 
-# Evaluation Function
-def evaluate_agent(agent, env, episodes=10):
-    total_rewards = []
-    for _ in range(episodes):
-        state = env.reset()[0]
+def evaluate(agent, env, num_episodes=5):
+    episode_rewards = []
+    for episode in tqdm(range(num_episodes), desc="Evaluating"):
+        observation, info = env.reset(seed=np.random.randint(0, 1000000))
+        
         episode_reward = 0
         done = False
-        step = 0
-        while not done and step < args.max_steps:
-            action = agent.select_action(state, noise=False)
-            next_state, reward, terminated, truncated, _ = env.step(action)
-            done = terminated or truncated
+        while not done:
+            action = agent.act(observation)
+            observation, reward, terminated, truncated, info = env.step(action)
             episode_reward += reward
-            state = next_state
-            step += 1
-        total_rewards.append(episode_reward)
-    return np.mean(total_rewards)
+            done = terminated or truncated
+        
+        episode_rewards.append(episode_reward)
+    
+    return episode_rewards
 
-# Training Loop
-def train_ddpg(args):
-    env = gym.make('Pendulum-v1')
-    state_dim = env.observation_space.shape[0]
-    action_dim = env.action_space.shape[0]
-    max_action = float(env.action_space.high[0])
+def main(args):
+    # Initialize environment
+    env = make_dmc_env("cartpole-balance", seed=np.random.randint(0, 1000000), flatten=True, use_pixels=False)
+    obs_size = env.observation_space.shape[0]  # 4 (flattened: pole_pos, cart_pos, pole_vel, cart_vel)
+    act_size = env.action_space.shape[0]  # 1
     
-    agent = DDPG(state_dim, action_dim, max_action, args)
+    # Initialize PPO
+    ppo = PPO(
+        obs_size=obs_size,
+        act_size=act_size,
+        lr=args.lr,
+        gamma=args.gamma,
+        clip_eps=args.clip_eps,
+        epochs=args.epochs,
+        batch_size=args.batch_size
+    )
     
-    os.makedirs('models', exist_ok=True)
-    model_path = 'models/ddpg_pendulum.pth'
+    # Initialize agent for evaluation
+    agent = Agent()  # Uses the trained model from agent.py
     
-    # Initialize tqdm progress bar
-    pbar = tqdm(total=args.episodes, desc="Training", unit="episode")
+    # Training parameters
+    episode_rewards = []
+    states, actions, rewards, log_probs, values, dones = [], [], [], [], [], []
     
-    for episode in range(args.episodes):
-        state = env.reset()[0]
+    # Progress bar for episodes
+    pbar = tqdm(range(args.max_episodes), desc="Training", unit="episode")
+    for episode in pbar:
+        observation, info = env.reset(seed=np.random.randint(0, 1000000))
         episode_reward = 0
-        step = 0
         
-        while step < args.max_steps:
-            action = agent.select_action(state, noise=True)
-            next_state, reward, terminated, truncated, _ = env.step(action)
-            done = terminated or truncated
+        for step in range(args.max_steps):
+            state = torch.FloatTensor(observation).to(ppo.device)
+            dist, value = ppo.model(state)
+            action = dist.sample()
+            log_prob = dist.log_prob(action).sum(-1)
             
-            agent.replay_buffer.push(state, action, reward, next_state, done)
-            agent.train()
+            action_np = action.cpu().detach().numpy()
+            next_observation, reward, terminated, truncated, info = env.step(action_np)
             
-            state = next_state
+            states.append(observation)
+            actions.append(action_np)
+            rewards.append(reward)
+            log_probs.append(log_prob.item())
+            values.append(value.item())
+            dones.append(0 if not (terminated or truncated) else 1)
+            
+            observation = next_observation
             episode_reward += reward
-            step += 1
             
-            if done:
+            if terminated or truncated:
                 break
+                
+        episode_rewards.append(episode_reward)
         
-        # Update tqdm progress bar with metrics
-        pbar.set_postfix({
-            'Episode': episode + 1,
-            'Reward': f"{episode_reward:.2f}"
-        })
-        pbar.update(1)
+        # Compute next value
+        next_state = torch.FloatTensor(observation).to(ppo.device)
+        _, next_value = ppo.model(next_state)
         
-        # Evaluate every 100 episodes
-        if (episode + 1) % 100 == 0:
-            avg_eval_reward = evaluate_agent(agent, env)
-            print(f"\nEvaluation at Episode {episode+1}: Average Reward = {avg_eval_reward:.2f}")
+        # Compute returns and advantages
+        advantages = ppo.compute_gae(rewards, values, next_value.item(), dones)
+        returns = [adv + val for adv, val in zip(advantages, values)]
+        
+        # Update policy
+        if len(states) >= args.update_freq:
+            ppo.update(states, actions, log_probs, returns, advantages)
+            states, actions, rewards, log_probs, values, dones = [], [], [], [], [], []
+        
+        # Update progress bar with metrics
+        avg_reward = np.mean(episode_rewards[-10:]) if len(episode_rewards) >= 10 else episode_reward
+        pbar.set_postfix({"Avg Reward": f"{avg_reward:.2f}"})
+        
+        # Evaluation every 100 episodes
+        if episode % 100 == 0 and episode > 0:
+            eval_rewards = evaluate(agent, env, num_episodes=5)
+            mean_reward = np.mean(eval_rewards)
+            std_reward = np.std(eval_rewards)
+            tqdm.write(f"Evaluation at episode {episode}: Mean Reward = {mean_reward:.2f}, Std = {std_reward:.2f}")
+            # Save model if evaluation performance is good
+            if mean_reward > 900:
+                ppo.save_model(f"ppo_cartpole_{episode}.pth")
+        
+        # Early stopping
+        if len(episode_rewards) > 50 and np.mean(episode_rewards[-50:]) > 990:
+            tqdm.write("Task solved!")
+            break
     
-    pbar.close()
-    
-    # Save the model
-    agent.save_model(model_path)
-    print(f"Model saved to {model_path}")
+    # Save final model
+    os.makedirs("models", exist_ok=True)
+    ppo.save_model("models/ppo_cartpole_final.pth")
+    tqdm.write("Final model saved at models/ppo_cartpole_final.pth")
     
     env.close()
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='DDPG for Pendulum-v1')
-    parser.add_argument('--actor_lr', type=float, default=1e-4, help='Actor learning rate')
-    parser.add_argument('--critic_lr', type=float, default=1e-3, help='Critic learning rate')
-    parser.add_argument('--batch_size', type=int, default=64, help='Batch size for training')
-    parser.add_argument('--gamma', type=float, default=0.99, help='Discount factor')
-    parser.add_argument('--tau', type=float, default=0.005, help='Soft update parameter')
-    parser.add_argument('--episodes', type=int, default=1000, help='Number of training episodes')
-    parser.add_argument('--max_steps', type=int, default=500, help='Max steps per episode')
-    parser.add_argument('--buffer_capacity', type=int, default=1000000, help='Replay buffer capacity')
+    parser = argparse.ArgumentParser(description="PPO for CartPole Balance")
+    parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate")
+    parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor")
+    parser.add_argument("--clip_eps", type=float, default=0.2, help="PPO clipping parameter")
+    parser.add_argument("--epochs", type=int, default=10, help="Number of epochs per update")
+    parser.add_argument("--batch_size", type=int, default=64, help="Batch size for updates")
+    parser.add_argument("--max_episodes", type=int, default=1000, help="Maximum number of episodes")
+    parser.add_argument("--max_steps", type=int, default=1000, help="Maximum steps per episode")
+    parser.add_argument("--update_freq", type=int, default=2048, help="Update frequency in steps")
     
     args = parser.parse_args()
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    train_ddpg(args)
+    main(args)
