@@ -47,6 +47,10 @@ class Agent(object):
             print("Warning: Model file not found. Using untrained model.")
         
     def act(self, observation):
+        # Handle dictionary observation (from dm_control) or flat array
+        if isinstance(observation, dict):
+            observation = np.concatenate([obs.flatten() for obs in observation.values()])
+        
         # Convert observation to tensor
         state = torch.tensor(observation, dtype=torch.float32, device=self.device).unsqueeze(0)
         
