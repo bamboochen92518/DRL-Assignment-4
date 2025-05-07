@@ -9,6 +9,7 @@ from collections import deque
 import random
 from tqdm import tqdm
 import os
+from student_agent import Agent  # Import Agent from agent.py
 
 # Replay Buffer with Reward Normalization
 class ReplayBuffer:
@@ -271,23 +272,27 @@ class SAC:
             target_param.data.copy_(self.args.tau * param.data + (1 - self.args.tau) * target_param.data)
 
     def evaluate(self):
-        self.actor.eval()
+        # Save current actor state to temporary file
+        os.makedirs("models", exist_ok=True)
+        torch.save(self.actor.state_dict(), "models/actor.pth")
+
+        # Instantiate Agent for evaluation
+        agent = Agent()
+
         eval_rewards = []
         for _ in range(10):  # Evaluate over 10 episodes
             time_step = self.env.reset()
-            state = self.get_state(time_step.observation)
+            observation = time_step.observation  # Dictionary observation
             episode_reward = 0
             for _ in range(self.args.max_steps):
-                with torch.no_grad():
-                    action, _ = self.actor.sample(state.unsqueeze(0))
-                    action = action.cpu().numpy().flatten()
+                action = agent.act(observation)
                 time_step = self.env.step(action)
-                state = self.get_state(time_step.observation)
-                episode_reward += time_step.reward
+                observation = time_step.observation
+                episode_reward += time_step.reward if time_step.reward is not None else 0.0
                 if time_step.last():
                     break
             eval_rewards.append(episode_reward)
-        self.actor.train()
+        
         return np.mean(eval_rewards)
 
     def save_model(self, episode=None):
@@ -343,10 +348,6 @@ class SAC:
                 print(f"Episode {episode + 1}/{self.args.max_episodes}, Eval Reward: {eval_reward:.2f}")
                 self.save_model(episode=episode + 1)
 
-            if avg_reward > 900:  # Arbitrary threshold for Humanoid Walk
-                print("Task solved!")
-                break
-
         self.save_model()
 
 def parse_args():
@@ -363,7 +364,7 @@ def parse_args():
     parser.add_argument("--hidden_dim", type=int, default=256, help="Hidden layer dimension")
     parser.add_argument("--replay_buffer_size", type=int, default=1000000, help="Replay buffer size")
     parser.add_argument("--batch_size", type=int, default=256, help="Batch size")
-    parser.add_argument("--max_episodes", type=int, default=3000, help="Maximum number of episodes")
+    parser.add_argument("--max_episodes", type=int, default=1000, help="Maximum number of episodes")
     parser.add_argument("--max_steps", type=int, default=1000, help="Maximum steps per episode")
     parser.add_argument("--update_steps", type=int, default=1, help="Number of updates per step")
     parser.add_argument("--target_entropy", type=float, default=None, help="Target entropy (default: -action_dim)")
