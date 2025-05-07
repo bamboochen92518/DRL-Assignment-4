@@ -3,6 +3,12 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import sys
+import os
+
+# Add parent directory to sys.path for dmc import
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from dmc import make_dmc_env
 
 class Actor(nn.Module):
     def __init__(self, state_dim, action_dim, hidden_dim, max_action):
@@ -27,18 +33,21 @@ class Actor(nn.Module):
         return action
 
 class Agent(object):
-    """SAC Agent for Humanoid Walk.
+    """SAC Agent for Humanoid Walk evaluation.
     
-    Expects observations as either a flat array of shape (67,) or a dictionary
-    (from dm_control) that flattens to 67 dimensions.
+    Expects flat observations of shape (67,) from the Humanoid Walk environment.
     """
     def __init__(self):
-        self.action_space = gym.spaces.Box(-1.0, 1.0, (21,), np.float64)
+        # Create environment to get action space
+        env = make_dmc_env("humanoid-walk", seed=0, flatten=True, use_pixels=False)
+        self.action_space = env.action_space
+        env.close()
+
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.state_dim = 67  # Based on Humanoid Walk observation space
-        self.action_dim = 21  # Based on Humanoid Walk action space
+        self.action_dim = self.action_space.shape[0]  # 21
         self.hidden_dim = 256
-        self.max_action = 1.0
+        self.max_action = float(self.action_space.high[0])  # 1.0
 
         # Initialize actor
         self.actor = Actor(self.state_dim, self.action_dim, self.hidden_dim, self.max_action).to(self.device)
@@ -51,13 +60,9 @@ class Agent(object):
             raise FileNotFoundError("Model file 'models/actor.pth' not found. Please train the model first.")
         
     def act(self, observation):
-        # Handle dictionary observation (from dm_control) or flat array
-        if isinstance(observation, dict):
-            observation = np.concatenate([obs.flatten() for obs in observation.values()])
-        
         # Verify observation shape
-        if observation.shape != (self.state_dim,):
-            raise ValueError(f"Expected observation shape ({self.state_dim},), got {observation.shape}")
+        if not isinstance(observation, np.ndarray) or observation.shape != (self.state_dim,):
+            raise ValueError(f"Expected observation shape ({self.state_dim},), got {observation.shape if isinstance(observation, np.ndarray) else type(observation)}")
         
         # Convert observation to tensor
         state = torch.tensor(observation, dtype=torch.float32, device=self.device).unsqueeze(0)

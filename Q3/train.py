@@ -1,15 +1,25 @@
 import argparse
+import sys
+import os
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-from dm_control import suite
 from collections import deque
 import random
 from tqdm import tqdm
-import os
 from student_agent import Agent  # Import Agent from agent.py
+
+# Add parent directory to sys.path for dmc import
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from dmc import make_dmc_env
+
+def make_env():
+    # Create environment with state observations
+    env_name = "humanoid-walk"
+    env = make_dmc_env(env_name, np.random.randint(0, 1000000), flatten=True, use_pixels=False)
+    return env
 
 # Replay Buffer with Reward Normalization
 class ReplayBuffer:
@@ -164,10 +174,10 @@ class SAC:
         self.device = torch.device(args.device)
 
         # Environment setup
-        self.env = suite.load(args.domain_name, args.task_name)
-        self.state_dim = int(sum(np.prod(spec.shape) for spec in self.env.observation_spec().values()))
-        self.action_dim = int(np.prod(self.env.action_spec().shape))
-        self.max_action = float(self.env.action_spec().maximum[0])
+        self.env = make_env()
+        self.state_dim = int(self.env.observation_space.shape[0])
+        self.action_dim = int(self.env.action_space.shape[0])
+        self.max_action = float(self.env.action_space.high[0])
 
         # SAC Networks
         self.actor = Actor(self.state_dim, self.action_dim, args.hidden_dim, self.max_action).to(self.device)
@@ -199,7 +209,7 @@ class SAC:
         self.replay_buffer = ReplayBuffer(self.state_dim, self.action_dim, args.replay_buffer_size, self.device)
 
     def get_state(self, observation):
-        return torch.tensor(np.concatenate([obs.flatten() for obs in observation.values()]), dtype=torch.float32, device=self.device)
+        return torch.tensor(observation, dtype=torch.float32, device=self.device)
 
     def update(self):
         if self.replay_buffer.size < self.args.batch_size:
@@ -281,15 +291,13 @@ class SAC:
 
         eval_rewards = []
         for _ in range(10):  # Evaluate over 10 episodes
-            time_step = self.env.reset()
-            observation = time_step.observation  # Dictionary observation
+            observation, _ = self.env.reset()
             episode_reward = 0
             for _ in range(self.args.max_steps):
                 action = agent.act(observation)
-                time_step = self.env.step(action)
-                observation = time_step.observation
-                episode_reward += time_step.reward if time_step.reward is not None else 0.0
-                if time_step.last():
+                observation, reward, terminated, truncated, _ = self.env.step(action)
+                episode_reward += reward if reward is not None else 0.0
+                if terminated or truncated:
                     break
             eval_rewards.append(episode_reward)
         
@@ -313,8 +321,8 @@ class SAC:
         progress_bar = tqdm(range(self.args.max_episodes), desc="Training", unit="episode")
 
         for episode in progress_bar:
-            time_step = self.env.reset()
-            state = self.get_state(time_step.observation)
+            observation, _ = self.env.reset()
+            state = self.get_state(observation)
             episode_reward = 0
             step = 0
 
@@ -323,10 +331,10 @@ class SAC:
                     action, _ = self.actor.sample(state.unsqueeze(0))
                     action = action.cpu().numpy().flatten()
 
-                time_step = self.env.step(action)
-                next_state = self.get_state(time_step.observation)
-                reward = time_step.reward if time_step.reward is not None else 0.0
-                done = 1.0 if time_step.last() else 0.0
+                observation, reward, terminated, truncated, _ = self.env.step(action)
+                next_state = self.get_state(observation)
+                reward = reward if reward is not None else 0.0
+                done = 1.0 if terminated or truncated else 0.0
 
                 self.replay_buffer.add(state.cpu().numpy(), action, reward, next_state.cpu().numpy(), done)
                 state = next_state
@@ -347,6 +355,10 @@ class SAC:
                 eval_reward = self.evaluate()
                 print(f"Episode {episode + 1}/{self.args.max_episodes}, Eval Reward: {eval_reward:.2f}")
                 self.save_model(episode=episode + 1)
+
+            if avg_reward > 900:  # Arbitrary threshold for Humanoid Walk
+                print("Task solved!")
+                break
 
         self.save_model()
 
