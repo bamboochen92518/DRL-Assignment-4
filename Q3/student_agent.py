@@ -27,7 +27,11 @@ class Actor(nn.Module):
         return action
 
 class Agent(object):
-    """SAC Agent for Humanoid Walk."""
+    """SAC Agent for Humanoid Walk.
+    
+    Expects observations as either a flat array of shape (67,) or a dictionary
+    (from dm_control) that flattens to 67 dimensions.
+    """
     def __init__(self):
         self.action_space = gym.spaces.Box(-1.0, 1.0, (21,), np.float64)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -44,12 +48,16 @@ class Agent(object):
             self.actor.load_state_dict(torch.load("models/actor.pth"))
             self.actor.eval()
         except FileNotFoundError:
-            print("Warning: Model file not found. Using untrained model.")
+            raise FileNotFoundError("Model file 'models/actor.pth' not found. Please train the model first.")
         
     def act(self, observation):
         # Handle dictionary observation (from dm_control) or flat array
         if isinstance(observation, dict):
             observation = np.concatenate([obs.flatten() for obs in observation.values()])
+        
+        # Verify observation shape
+        if observation.shape != (self.state_dim,):
+            raise ValueError(f"Expected observation shape ({self.state_dim},), got {observation.shape}")
         
         # Convert observation to tensor
         state = torch.tensor(observation, dtype=torch.float32, device=self.device).unsqueeze(0)

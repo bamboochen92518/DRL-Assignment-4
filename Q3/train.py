@@ -363,7 +363,7 @@ def parse_args():
     parser.add_argument("--hidden_dim", type=int, default=256, help="Hidden layer dimension")
     parser.add_argument("--replay_buffer_size", type=int, default=1000000, help="Replay buffer size")
     parser.add_argument("--batch_size", type=int, default=256, help="Batch size")
-    parser.add_argument("--max_episodes", type=int, default=1000, help="Maximum number of episodes")
+    parser.add_argument("--max_episodes", type=int, default=3000, help="Maximum number of episodes")
     parser.add_argument("--max_steps", type=int, default=1000, help="Maximum steps per episode")
     parser.add_argument("--update_steps", type=int, default=1, help="Number of updates per step")
     parser.add_argument("--target_entropy", type=float, default=None, help="Target entropy (default: -action_dim)")
