@@ -26,6 +26,9 @@ jobs:
     - name: 2. Installing dependencies
       run: |
         pip install -r requirements.txt
+        gdown --fuzzy "https://drive.google.com/file/d/1zXETDmcbDDhp5-0peCx5U01Zg_i1U_Wk/view?usp=sharing"
+        mkdir ./Q3/models
+        mv actor.pth ./Q3/models/
 
     - name: 3. Run Evaluation
       run: |
